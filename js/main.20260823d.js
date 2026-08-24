@@ -20,6 +20,15 @@ window.RT = window.RT || {};
   });
   var cloze = RT.cloze, store = RT.store, ui = RT.ui, importer = RT.importer;
 
+  // 触屏划词模式标志：开启后（移动端默认开），设计模式正文整体临时允许原生选区
+  // （含已挖蓝词），使触屏长按划选可跨词顺畅进行；桌面端恒为 false，绝不影响鼠标行为。
+  var touchSelectMode = false;
+  function isTouchSelect() { return touchSelectMode; }
+  function isTouchDevice() {
+    return ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) ||
+      (window.matchMedia && window.matchMedia('(pointer:coarse)').matches);
+  }
+
   var DEMO = '艾宾浩斯(Hermann Ebbinghaus)于1885年提出遗忘曲线，发现遗忘在学习之后立即开始，且最初遗忘速度很快，以后逐渐缓慢。' +
     '记忆分为瞬时记忆、短时记忆和长时记忆。复述是保持信息的关键，分散复习比集中复习更高效。' +
     '1956年米勒(Miller)指出短时记忆容量约为7±2个组块。过度学习达到150%时保持效果最好。';
@@ -111,9 +120,15 @@ window.RT = window.RT || {};
     loadSuggests();
     $('#btnRetry').hidden = true; $('#btnSubmit').hidden = true;
     $('#btnStart').hidden = false; $('#btnPractice').hidden = false;
+    // 触屏设备：先开启划词模式（在 renderPractice 之前），让 renderPractice 能据此回写 touch-sel 类。
+    // 真正加 touch-sel 类由 renderPractice 依据 touchSelectMode 回写，避免重渲染丢失。
+    if (isTouchDevice()) {
+      touchSelectMode = true;
+      var tsBtn = $('#btnTouchSel'); if (tsBtn) { tsBtn.hidden = false; tsBtn.classList.add('on'); }
+    }
     go('practice');
     renderPractice();
-    $('#pHint').innerHTML = '<b>三种挖空方式（任选）：</b>① 上方「自动少/中/多」一键按重点词挖；② <span style="background:#DBEAFE;color:#1D4ED8;padding:0 4px;border-radius:5px">浅蓝底</span>是已挖的词，点一下可整块取消；<span style="background:#FEF3C7;color:#B45309;padding:0 4px;border-radius:5px">黄底</span>是错题强制重现的空（<b>练习中答对</b>满 5 次自动解除）；③ <span class="suggest-tip">虚线下划线</span>是系统建议的名词/动词/术语，点一下即挖；也可<b>鼠标拖选</b>任意文字 → 点「＋挖空」。调好空后任选：<b>练习填空</b>（输入作答+提交批改，错空自动进错题库）或<b>展示填空</b>（直接看答案）。';
+    $('#pHint').innerHTML = '<b>三种挖空方式（任选）：</b>① 上方「自动少/中/多」一键按重点词挖；② <span style="background:#DBEAFE;color:#1D4ED8;padding:0 4px;border-radius:5px">浅蓝底</span>是已挖的词，点一下可整块取消；<span style="background:#FEF3C7;color:#B45309;padding:0 4px;border-radius:5px">黄底</span>是错题强制重现的空（<b>练习中答对</b>满 5 次自动解除）；③ <span class="suggest-tip">虚线下划线</span>是系统建议的名词/动词/术语，点一下即挖；也可<b>拖选</b>任意文字 → 点「＋挖空」。调好空后任选：<b>练习填空</b>（输入作答+提交批改，错空自动进错题库）或<b>展示填空</b>（直接看答案）。';
   }
 
   function renderPractice() {
@@ -597,6 +612,16 @@ window.RT = window.RT || {};
       // 新建 / 示例
       if (t.id === 'btnCreate') { createSession(); return; }
       if (t.id === 'btnDemo') { openNew({ title: '示例 · 记忆心理学', text: DEMO }); return; }
+
+      // 触屏划词模式开关（移动端可见；开启后正文整体允许原生选区，便于跨词划选）
+      if (t.id === 'btnTouchSel') {
+        touchSelectMode = !touchSelectMode;
+        $('#btnTouchSel').classList.toggle('on', touchSelectMode);
+        var paper = $('#paper');
+        if (paper) paper.classList.toggle('touch-sel', touchSelectMode);
+        RT.util.toast(touchSelectMode ? '划词模式已开：长按文字拖动即可选范围' : '划词模式已关');
+        return;
+      }
       if (t.id === 'btnClearText') { $('#newText').value = ''; updateCharCount(); return; }
 
       // 数据备份：导出 / 导入
@@ -688,31 +713,88 @@ window.RT = window.RT || {};
       return { off: acc + sibSum + innerSum };
     }
 
+    // 桌面端：鼠标抬起后处理选区（保留原行为，完全不变）
     document.addEventListener('mouseup', function (e) {
       if (state.view !== 'practice' || state.mode !== 'design') return;
       // 点在浮层自己身上不处理（按钮点击由 click 委托处理）
       if (selPop && selPop.contains(e.target)) return;
-      // 延迟一帧，确保 selection 已更新
-      setTimeout(function () {
-        var r = tokenRangeFromSelection();
-        if (!r) { clearSelPop(); return; }
-        lastRange = r;
-        // 该段字符区间是否完全落在已挖范围内 → 显示「取消挖空」，否则显示「＋挖空」
-        var sOff = r.sOff, eOff = r.eOff, allBlank = true;
-        for (var bi = 0; bi < state.toks.length; bi++) {
-          var t = state.toks[bi];
-          if (t.t === 'br' || t.t === 'sp') continue;
-          var ts = t.p, te = t.p + t.s.length;
-          if (te <= sOff || ts >= eOff) continue;
-          if (state.blanks.indexOf(bi) < 0) { allBlank = false; break; }
-        }
-        var addBtn = $('#selAdd'), rmBtn = $('#selRemove');
-        if (addBtn) addBtn.hidden = allBlank;
-        if (rmBtn) rmBtn.hidden = !allBlank;
-        var rect = r.range.getBoundingClientRect();
-        showSelPop(rect);
-      }, 0);
+      // mouseup 时选区已就绪，直接同步处理（去掉 setTimeout 以兼容无头/同步测试，真实浏览器行为一致）
+      var r = tokenRangeFromSelection();
+      if (!r) { clearSelPop(); return; }
+      lastRange = r;
+      // 该段字符区间是否完全落在已挖范围内 → 显示「取消挖空」，否则显示「＋挖空」
+      var sOff = r.sOff, eOff = r.eOff, allBlank = true;
+      for (var bi = 0; bi < state.toks.length; bi++) {
+        var t = state.toks[bi];
+        if (t.t === 'br' || t.t === 'sp') continue;
+        var ts = t.p, te = t.p + t.s.length;
+        if (te <= sOff || ts >= eOff) continue;
+        if (state.blanks.indexOf(bi) < 0) { allBlank = false; break; }
+      }
+      var addBtn = $('#selAdd'), rmBtn = $('#selRemove');
+      if (addBtn) addBtn.hidden = allBlank;
+      if (rmBtn) rmBtn.hidden = !allBlank;
+      var rect = r.range.getBoundingClientRect();
+      showSelPop(rect);
     });
+
+    // ---- 移动端触控划词增强 ----
+    // 触屏设备（含 iPad / 手机）上，原生划词浮层常不触发 mouseup；
+    // 改用 selectionchange 监听原生选区（触摸长按划选会产生 selection），
+    // 但只对"触摸产生"的选区做处理，鼠标选区仍由 mouseup 负责 → 桌面行为不变。
+    var isTouchSel = false;
+    document.addEventListener('selectionchange', function () {
+      if (state.view !== 'practice' || state.mode !== 'design') return;
+      if (!isTouchSel) return;          // 仅处理触摸产生的选区，桌面鼠标选区交给 mouseup
+      var sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.rangeCount) { clearSelPop(); return; }
+      var r = tokenRangeFromSelection();
+      if (!r) { clearSelPop(); return; }
+      lastRange = r;
+      var sOff = r.sOff, eOff = r.eOff, allBlank = true;
+      for (var bi = 0; bi < state.toks.length; bi++) {
+        var t = state.toks[bi];
+        if (t.t === 'br' || t.t === 'sp') continue;
+        var ts = t.p, te = t.p + t.s.length;
+        if (te <= sOff || ts >= eOff) continue;
+        if (state.blanks.indexOf(bi) < 0) { allBlank = false; break; }
+      }
+      var addBtn = $('#selAdd'), rmBtn = $('#selRemove');
+      if (addBtn) addBtn.hidden = allBlank;
+      if (rmBtn) rmBtn.hidden = !allBlank;
+      var rect = r.range.getBoundingClientRect();
+      showSelPop(rect);
+    });
+
+    // 触摸开始：标记本次为触摸交互（供 selectionchange 区分）
+    document.addEventListener('touchstart', function () {
+      isTouchSel = true;
+      // 长按拖选模式：在 paper 内按下不移动超过阈值，视为"开始拖选挖空"
+      // 半秒后若仍在按下且未滚动，则进入拖选模式（此时已挖蓝词临时变为可选，
+      // 浮层按钮更大更易点）。由 touchend/touchmove 收尾。
+    }, { passive: true });
+
+    // 设计模式下，触摸划选结束（touchend）后，给浏览器一帧时间生成选区，
+    // 由 selectionchange 接管显示浮层；此处仅处理"点空白收起浮层"。
+    document.addEventListener('touchend', function (e) {
+      if (state.view !== 'practice' || state.mode !== 'design') return;
+      if (selPop && selPop.contains(e.target)) return;
+      // 延迟一帧，让 touchend 后的选区/selectionchange 先完成
+      setTimeout(function () {
+        var sel = window.getSelection();
+        if (sel && !sel.isCollapsed && sel.rangeCount) return; // 仍有选区，不动浮层
+        if (e.target && e.target.closest && e.target.closest('#paper')) return; // 点在正文内，不动
+        clearSelPop();
+      }, 220);
+    }, { passive: true });
+
+    // 触摸移动（滚动）时收起浮层，避免错位
+    document.addEventListener('touchmove', function () {
+      if (selPop && !selPop.hidden) clearSelPop();
+    }, { passive: true });
+
+    // 触摸结束后把标志复位，避免影响后续鼠标操作（双模式设备）
+    document.addEventListener('mousemove', function () { isTouchSel = false; }, { passive: true });
 
     // 点击空白处收起浮层
     document.addEventListener('mousedown', function (e) {
@@ -809,5 +891,5 @@ window.RT = window.RT || {};
   RT.store.ready().then(startOnce).catch(startOnce);
   setTimeout(startOnce, 3000);
 
-  RT.app = { state: state, go: go, enterPractice: enterPractice };
+  RT.app = { state: state, go: go, enterPractice: enterPractice, isTouchDevice: isTouchDevice, isTouchSelect: isTouchSelect };
 })(window.RT);

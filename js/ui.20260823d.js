@@ -62,6 +62,11 @@ window.RT = window.RT || {};
     var html = '', bi = 0;
     var paper = $('#paper');
     paper.className = 'txt' + (mode === 'design' ? ' mode-design' : '');
+    // 触屏划词模式：re-render 后保留 touch-sel 类（touchSelectMode 由 main 维护，
+    // 这里仅按标志回写 class，保证划词模式在重试/重渲染后不丢失）
+    if (RT.app && RT.app.isTouchSelect && RT.app.isTouchSelect()) {
+      paper.classList.add('touch-sel');
+    }
     var i = 0;
     while (i < toks.length) {
       var t = toks[i];
